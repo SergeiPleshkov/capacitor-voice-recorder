@@ -53,30 +53,55 @@ public class VoiceRecorder: CAPPlugin {
     }
     
     @objc func stopRecording(_ call: CAPPluginCall) {
-        if(customMediaRecorder == nil) {
-            call.reject(Messages.RECORDING_HAS_NOT_STARTED)
-            return
-        }
-        
+      if(customMediaRecorder == nil) {
+        call.reject(Messages.RECORDING_HAS_NOT_STARTED)
+        return
+      }
+
+      do {
         customMediaRecorder?.stopRecording()
-        
         let audioFileUrl = customMediaRecorder?.getOutputFile()
-        if(audioFileUrl == nil) {
-            customMediaRecorder = nil
-            call.reject(Messages.FAILED_TO_FETCH_RECORDING)
-            return
-        }
-        let recordData = RecordData(
-            recordDataBase64: readFileAsBase64(audioFileUrl),
+        let filePath = call.getString("filePath")
+
+        if let filePath = filePath, let audioFileUrl = audioFileUrl {
+          let dataFolder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+          let destinationFile = dataFolder.appendingPathComponent(filePath)
+          let parentFolder = destinationFile.deletingLastPathComponent()
+
+          if !FileManager.default.fileExists(atPath: parentFolder.path) {
+            try FileManager.default.createDirectory(at: parentFolder, withIntermediateDirectories: true, attributes: nil)
+          }
+
+          try FileManager.default.copyItem(at: audioFileUrl, to: destinationFile)
+
+          let recordData = RecordData(
+            recordDataBase64: nil,
+            msDuration: getMsDurationOfAudioFile(destinationFile),
             mimeType: "audio/aac",
-            msDuration: getMsDurationOfAudioFile(audioFileUrl)
-        )
-        customMediaRecorder = nil
-        if recordData.recordDataBase64 == nil || recordData.msDuration < 0 {
+            path: destinationFile.path
+          )
+          call.resolve(ResponseGenerator.dataResponse(recordData.toDictionary()))
+        } else if let audioFileUrl = audioFileUrl {
+          let recordData = RecordData(
+            recordDataBase64: readFileAsBase64(audioFileUrl),
+            msDuration: getMsDurationOfAudioFile(audioFileUrl),
+            mimeType: "audio/aac",
+            path: nil
+          )
+          if recordData.recordDataBase64 == nil || recordData.msDuration < 0 {
             call.reject(Messages.EMPTY_RECORDING)
-        } else {
+          } else {
             call.resolve(ResponseGenerator.dataResponse(recordData.toDictionary()))
+          }
+        } else {
+          call.reject(Messages.FAILED_TO_FETCH_RECORDING)
         }
+      } catch {
+        call.reject(Messages.FAILED_TO_SAVE_RECORDING, error)
+      } finally {
+        customMediaRecorder?.deleteOutputFile()
+        customMediaRecorder = nil
+      }
     }
     
     @objc func pauseRecording(_ call: CAPPluginCall) {
